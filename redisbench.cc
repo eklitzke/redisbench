@@ -18,9 +18,11 @@ class RedisContext {
   RedisContext(const RedisContext &other) = delete;
   void operator=(const RedisContext &other) = delete;
 
-  // this can exit, naughty
   RedisContext(const std::string &host, std::uint16_t port)
-      :ctx_(redisConnect(host.c_str(), port)) {
+      :ctx_(redisConnect(host.c_str(), port)) {}
+
+  // this can exit, naughty
+  void EnsureOk() {
     if (ctx_ == nullptr) {
       std::cerr << "failed to allocate redisContext\n";
       exit(EXIT_FAILURE);
@@ -68,6 +70,7 @@ void run_process(const std::string &host,
                  const std::size_t key_size,
                  const std::size_t val_size) {
   RedisContext ctx(host, port);
+  ctx.EnsureOk();
 
   std::ifstream urandom("/dev/urandom");
   std::unique_ptr<char []> key(new char[key_size]);
@@ -98,6 +101,14 @@ void run_process(const std::string &host,
 }
 
 int main() {
+  // create a test context before proceeding with the forking
+  // rigamarole, to ensure that we can actually connect to redis
+  {
+    RedisContext test_context("127.0.0.1", 6379);
+    test_context.EnsureOk();
+  }
+
+  // create the worker children
   for (int i = 0; i < CONCURRENCY; i++) {
     int pid = fork();
     if (pid == -1) {
@@ -108,6 +119,8 @@ int main() {
       return 0;
     }
   }
+
+  // wait for them to finish
   for (int i = 0; i < CONCURRENCY; i++) {
     int status;
     pid_t pid = wait(&status);
@@ -116,5 +129,6 @@ int main() {
       return 1;
     }
   }
+
   return 0;
 }
