@@ -7,63 +7,94 @@
 #include <sstream>
 #include <vector>
 
+#include <boost/asio.hpp>
+#include <boost/lexical_cast.hpp>
 #include <boost/program_options.hpp>
-#include <hiredis/hiredis.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+using boost::asio::ip::tcp;
+
 namespace po = boost::program_options;
 
-class RedisContext {
+class XString {
  public:
-  RedisContext() = delete;
-  RedisContext(const RedisContext &other) = delete;
-  void operator=(const RedisContext &other) = delete;
+  XString() = delete;
+  XString(const char *data, std::size_t data_size)
+      :data_(data), size_(data_size) {}
 
-  RedisContext(const std::string &host, std::uint16_t port)
-      :ctx_(redisConnect(host.c_str(), port)) {}
-
-  // this can exit, naughty
-  void EnsureOk() {
-    if (ctx_ == nullptr) {
-      std::cerr << "failed to allocate redisContext\n";
-      exit(EXIT_FAILURE);
-    }
-    if (ctx_->err) {
-      std::cerr << "connection error: " << ctx_->errstr << "\n";
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  inline redisContext* ctx() { return ctx_; }
-
-  ~RedisContext() { redisFree(ctx_); }
+  inline const char *data() const { return data_; }
+  inline std::size_t size() const { return size_; }
 
  private:
-  redisContext *ctx_;
+  const char *data_;
+  std::size_t size_;
 };
 
-class Command {
+class RedisClient {
  public:
-  Command() = delete;
-  Command(const Command &other) = delete;
-  void operator=(const Command &other) = delete;
+  RedisClient() = delete;
+  RedisClient(const RedisClient &other) = delete;
+  void operator=(const RedisClient &other) = delete;
 
-  Command(RedisContext *ctx, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    reply_ = reinterpret_cast<redisReply *>(redisvCommand(ctx->ctx(), fmt, ap));
-    va_end(ap);
+  explicit RedisClient(boost::asio::io_service &io_service)
+      :io_service_(io_service), socket_(io_service) {}
+
+  void Connect(const std::string &host, std::uint16_t port) {
+    const std::string str_port = boost::lexical_cast<std::string>(port);
+    boost::asio::ip::tcp::resolver resolver(io_service_);
+    boost::asio::ip::tcp::resolver::query query(
+        host, str_port.c_str(),
+        boost::asio::ip::resolver_query_base::numeric_service);
+    boost::asio::ip::tcp::resolver::iterator iterator = resolver.resolve(query);
+    boost::asio::connect(socket_, iterator);
   }
 
-  inline bool ok() const { return reply_ != nullptr; }
+  bool Set(const XString &key, const XString &val) {
+    std::ostream os(&buf_);
+    os << "*3\r\n$3\r\nSET\r\n$" << key.size() << "\r\n";
+    os.write(key.data(), key.size());
+    os << "\r\n$" << val.size() << "\r\n";
+    os.write(val.data(), val.size());
+    os << "\r\n";
 
-  inline redisReply* reply() { return reply_; }
+    std::size_t n = socket_.send(buf_.data());
+    buf_.consume(n);
+    return ExpectResponse();
+  }
 
-  ~Command() { freeReplyObject(reply_); }
+  bool FlushAll() {
+    std::ostream os(&buf_);
+    os << "*1\r\n$8\r\nFLUSHALL\r\n";
+    std::size_t n = socket_.send(buf_.data());
+    buf_.consume(n);
+    return ExpectResponse();
+  }
 
  private:
-  redisReply *reply_;
+  boost::asio::io_service &io_service_;
+  tcp::socket socket_;
+  boost::asio::streambuf buf_;
+
+  bool ExpectResponse() {
+    boost::system::error_code error;
+    boost::asio::read_until(socket_, buf_, "\r\n", error);
+    std::istream response_str(&buf_);
+    char status_char;
+    response_str.get(status_char);
+    if (status_char == '+') {
+      buf_.consume(buf_.size());
+      return true;
+    } else {
+      std::cerr << status_char;
+      std::istream str(&buf_);
+      std::string s;
+      std::getline(str, s);
+      std::cerr << s << std::endl;
+      return false;
+    }
+
+  }
 };
 
 // Simple RAII interface around an array of C data that doesn't overallocate.
@@ -93,8 +124,9 @@ void run_process(const std::string &host,
                  const std::size_t num_writes,
                  const std::size_t key_size,
                  const std::size_t val_size) {
-  RedisContext ctx(host, port);
-  ctx.EnsureOk();
+  boost::asio::io_service io_service;
+  RedisClient client(io_service);
+  client.Connect(host, port);
 
   std::ifstream urandom("/dev/urandom");
   std::unique_ptr<char []> key(new char[key_size]);
@@ -112,10 +144,11 @@ void run_process(const std::string &host,
 
     std::chrono::time_point<std::chrono::system_clock> start = \
         std::chrono::system_clock::now();
-    Command cmd(&ctx, "SET %b %b", key.get(), key_size, val.get(), val_size);
+    bool ok = client.Set(XString(key.get(), key_size),
+                         XString(val.get(), val_size));
     long elapsed_micros = std::chrono::duration_cast<std::chrono::microseconds>
         (std::chrono::system_clock::now() - start).count();
-    if (!cmd.ok()) {
+    if (!ok) {
       std::cerr << "failed to set value!\n";
       exit(EXIT_FAILURE);
     }
@@ -172,10 +205,15 @@ int main(int argc, char **argv) {
   // create a test context before proceeding with the forking
   // rigamarole, to ensure that we can actually connect to redis
   {
-    RedisContext test_context(redis_host, redis_port);
-    test_context.EnsureOk();
+    boost::asio::io_service io_service;
+    RedisClient client(io_service);
+    client.Connect(redis_host, redis_port);
     std::cout << "flushing all data..." << std::flush;
-    Command cmd(&test_context, "FLUSHALL");
+    bool status = client.FlushAll();
+    if (!status) {
+      std::cerr << "error flushing!\n";
+      return 1;
+    }
     std::cout << " done!" << std::endl;
   }
 
