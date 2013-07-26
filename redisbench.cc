@@ -174,7 +174,9 @@ int main(int argc, char **argv) {
   {
     RedisContext test_context(redis_host, redis_port);
     test_context.EnsureOk();
+    std::cout << "flushing all data..." << std::flush;
     Command cmd(&test_context, "FLUSHALL");
+    std::cout << " done!" << std::endl;
   }
 
   std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
