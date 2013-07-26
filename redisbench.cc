@@ -1,14 +1,14 @@
 #include <cassert>
-#include <cstdlib>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <memory>
+#include <sstream>
 
-#include <unistd.h>
 #include <hiredis/hiredis.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #define CONCURRENCY 8
 
@@ -109,7 +109,10 @@ int main() {
   for (int i = 0; i < CONCURRENCY; i++) {
     int status;
     pid_t pid = wait(&status);
-    assert(pid != -1);
+    if (pid == -1) {
+      perror("wait()");
+      return 1;
+    }
   }
   return 0;
 }
