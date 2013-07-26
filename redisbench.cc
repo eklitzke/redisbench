@@ -115,7 +115,7 @@ int main() {
       perror("fork()");
       return 1;
     } else if (!pid) {
-      run_process("127.0.0.1", 6379, 20, 500, 100000);
+      run_process("127.0.0.1", 6379, 10000, 20, 500);
       return 0;
     }
   }
