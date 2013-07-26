@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <vector>
 
 #include <boost/program_options.hpp>
 #include <hiredis/hiredis.h>
@@ -65,6 +66,28 @@ class Command {
   redisReply *reply_;
 };
 
+// Simple RAII interface around an array of C data that doesn't overallocate.
+template <typename T>
+class CompactVector {
+ public:
+  CompactVector() = delete;
+  CompactVector(const CompactVector &other) = delete;
+  void operator=(const CompactVector &other) = delete;
+
+  CompactVector(std::size_t size)
+      :size_(size), data_(new T[size]) {}
+
+  inline T& operator[] (std::size_t index) { return data_.get()[index]; }
+
+  inline std::size_t size() const { return size_; }
+
+  inline T* data() { return data_.get(); }
+
+ private:
+  const std::size_t size_;
+  std::unique_ptr<T[]> data_;
+};
+
 void run_process(const std::string &host,
                  const std::uint16_t port,
                  const std::size_t num_writes,
@@ -77,7 +100,12 @@ void run_process(const std::string &host,
   std::unique_ptr<char []> key(new char[key_size]);
   std::unique_ptr<char []> val(new char[val_size]);
 
-  long max_millis = 0;
+  // Allocate a vector so we can get percentile values.... this should
+  // be fairly reasonable, for a million keys, using longs, on a
+  // 64-bit platform this uses 8MB of memory, which is not very
+  // much at all, even if we have multiple workers.
+  CompactVector<long> timings(num_writes);
+
   for (std::size_t i = 0; i < num_writes; i++) {
     urandom.read(key.get(), key_size);
     urandom.read(val.get(), val_size);
@@ -85,20 +113,29 @@ void run_process(const std::string &host,
     std::chrono::time_point<std::chrono::system_clock> start = \
         std::chrono::system_clock::now();
     Command cmd(&ctx, "SET %b %b", key.get(), key_size, val.get(), val_size);
-    long elapsed_millis = std::chrono::duration_cast<std::chrono::milliseconds>
+    long elapsed_micros = std::chrono::duration_cast<std::chrono::microseconds>
         (std::chrono::system_clock::now() - start).count();
     if (!cmd.ok()) {
       std::cerr << "failed to set value!\n";
       exit(EXIT_FAILURE);
     }
-    max_millis = std::max(max_millis, elapsed_millis);
+    timings[i] = elapsed_micros;
   }
 
-  // try to print the result atomically, since multiple processes may
-  // exit at once
+  // analyze the results
+  std::sort(timings.data(), timings.data() + timings.size());
+  long median = timings[num_writes / 2];
+  long p95 = timings[num_writes * 19 / 20];
+  long p99 = timings[num_writes * 99 / 100];
+  long max = timings[num_writes - 1];
+
+  // try to print the result atomically, using cout.write() instead of
+  // the stream operators, since multiple processes may exit at once
   std::stringstream ss;
-  ss << "pid " << getpid() << ", max millis: " << max_millis;
-  puts(ss.str().c_str());
+  ss << "pid " << getpid() << ", "
+     << median << " " << p95 << " " << p99 << " " << max << "\n";
+  std::string outline = ss.str();
+  std::cout.write(outline.data(), outline.size());
 }
 
 int main(int argc, char **argv) {
@@ -138,6 +175,8 @@ int main(int argc, char **argv) {
     RedisContext test_context(redis_host, redis_port);
     test_context.EnsureOk();
   }
+
+  std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
 
   // create the worker children
   for (std::size_t i = 0; i < concurrency; i++) {

@@ -1,5 +1,8 @@
+CFLAGS := -O3 -std=c++0x
+LIBS := -lboost_program_options -lhiredis
+
 redisbench: redisbench.cc
-	$(CXX) -std=c++0x $< -lboost_program_options -lhiredis -o $@
+	$(CXX) $(CFLAGS) $< $(LIBS) -o $@
 
 .PHONY: clean
 clean:
