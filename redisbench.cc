@@ -33,6 +33,8 @@ class RedisContext {
 
   inline redisContext* ctx() { return ctx_; }
 
+  ~RedisContext() { redisFree(ctx_); }
+
  private:
   redisContext *ctx_;
 };
