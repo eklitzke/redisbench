@@ -148,7 +148,7 @@ int main(int argc, char **argv) {
        "port to connect on")
       ("concurrency,c", po::value<std::size_t>()->default_value(8),
        "concurrency level (number of workers)")
-      ("num-writes,n", po::value<std::size_t>()->default_value(15000),
+      ("num-writes,n", po::value<std::size_t>()->default_value(100000),
        "number of writes to issue per worker")
       ("key-size", po::value<std::size_t>()->default_value(20),
        "the key size, in bytes")
@@ -174,6 +174,7 @@ int main(int argc, char **argv) {
   {
     RedisContext test_context(redis_host, redis_port);
     test_context.EnsureOk();
+    Command cmd(&test_context, "FLUSHALL");
   }
 
   std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
