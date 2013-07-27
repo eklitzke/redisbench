@@ -119,6 +119,46 @@ class CompactVector {
   std::unique_ptr<T[]> data_;
 };
 
+class FastRandomString {
+ public:
+  FastRandomString() = delete;
+  FastRandomString(const FastRandomString &other) = delete;
+  void operator=(const FastRandomString &other) = delete;
+
+  explicit FastRandomString(std::size_t out_size)
+      :out_size_(out_size) {
+    std::ifstream urandom("/dev/urandom");
+    std::uint32_t seed_val;
+    urandom.read(reinterpret_cast<char *>(&seed_val), sizeof(seed_val));
+    rng_.seed(seed_val);
+
+    generations_ = out_size / sizeof(std::uint32_t);
+    if (generations_ * sizeof(std::uint32_t) < out_size) {
+      generations_++;
+    }
+    std::size_t actual_size = generations_ * sizeof(std::uint32_t);
+    assert(actual_size >= out_size);
+    out_buf_ = std::move(std::unique_ptr<char []>(new char[actual_size]));
+  }
+
+  void Generate() {
+    for (std::size_t i = 0; i < generations_; i++) {
+      std::uint32_t num = uint_dist_(rng_);
+      *reinterpret_cast<std::uint32_t*>(
+          out_buf_.get() + i * sizeof(std::uint32_t)) = num;
+    }
+  }
+
+  inline const char *data() { return out_buf_.get(); }
+
+ private:
+  const std::size_t out_size_;
+  std::size_t generations_;
+  std::unique_ptr<char []> out_buf_;
+  std::mt19937 rng_;
+  std::uniform_int_distribution<std::uint32_t> uint_dist_;
+};
+
 void run_process(const std::string &host,
                  const std::uint16_t port,
                  const std::size_t num_writes,
@@ -128,7 +168,6 @@ void run_process(const std::string &host,
   RedisClient client(io_service);
   client.Connect(host, port);
 
-  std::ifstream urandom("/dev/urandom");
   std::unique_ptr<char []> key(new char[key_size]);
   std::unique_ptr<char []> val(new char[val_size]);
 
@@ -138,14 +177,16 @@ void run_process(const std::string &host,
   // much at all, even if we have multiple workers.
   CompactVector<long> timings(num_writes);
 
-  for (std::size_t i = 0; i < num_writes; i++) {
-    urandom.read(key.get(), key_size);
-    urandom.read(val.get(), val_size);
+  FastRandomString key_gen(key_size);
+  FastRandomString val_gen(val_size);
 
+  for (std::size_t i = 0; i < num_writes; i++) {
+    key_gen.Generate();
+    val_gen.Generate();
     std::chrono::time_point<std::chrono::system_clock> start = \
         std::chrono::system_clock::now();
-    bool ok = client.Set(XString(key.get(), key_size),
-                         XString(val.get(), val_size));
+    bool ok = client.Set(XString(key_gen.data(), key_size),
+                         XString(val_gen.data(), val_size));
     long elapsed_micros = std::chrono::duration_cast<std::chrono::microseconds>
         (std::chrono::system_clock::now() - start).count();
     if (!ok) {
