@@ -203,6 +203,7 @@ void run_process(const std::string &host,
   long median = timings[num_writes / 2];
   long p95 = timings[num_writes * 19 / 20];
   long p99 = timings[num_writes * 99 / 100];
+  long p999 = timings[num_writes * 999 / 1000];
   long max = timings[num_writes - 1];
 
   // try to print the result atomically, using cout.write() instead of
@@ -214,7 +215,7 @@ void run_process(const std::string &host,
   if (aof_rewrite_percentage) {
     ss << aof_rewrite_percentage << ",";
   }
-  ss << median << "," << p95 << "," << p99 << "," << max << "\n";
+  ss << median << "," << p95 << "," << p99 << "," << p999 << "," << max << "\n";
   std::string outline = ss.str();
   std::cout.write(outline.data(), outline.size());
 }
@@ -275,7 +276,7 @@ int main(int argc, char **argv) {
   }
 
   if (!quiet) {
-    std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
+    std::cout << "format is: pid, median us, 95th us, 99th us, 99.9th us, max us\n";
   }
 
   // create the worker children
