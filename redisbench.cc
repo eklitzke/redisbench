@@ -164,7 +164,8 @@ void run_process(const std::string &host,
                  const std::size_t num_writes,
                  const std::size_t key_size,
                  const std::size_t val_size,
-                 const bool quiet = false) {
+                 const bool quiet = false,
+                 const int aof_rewrite_percentage = 0) {
   boost::asio::io_service io_service;
   RedisClient client(io_service);
   client.Connect(host, port);
@@ -210,7 +211,10 @@ void run_process(const std::string &host,
   if (!quiet) {
     ss << "pid " << getpid() << ", ";
   }
-  ss << median << " " << p95 << " " << p99 << " " << max << "\n";
+  if (aof_rewrite_percentage) {
+    ss << aof_rewrite_percentage << ",";
+  }
+  ss << median << "," << p95 << "," << p99 << "," << max << "\n";
   std::string outline = ss.str();
   std::cout.write(outline.data(), outline.size());
 }
@@ -232,7 +236,7 @@ int main(int argc, char **argv) {
        "the key size, in bytes")
       ("value-size", po::value<std::size_t>()->default_value(500),
        "the value size, in bytes")
-      ("aof-rewrite-percentage", po::value<int>(),
+      ("aof-rewrite-percentage", po::value<int>()->default_value(0),
        "the current AOF rewrite precentage")
       ;
 
@@ -248,6 +252,7 @@ int main(int argc, char **argv) {
   const std::string redis_host = vm["host"].as<std::string>();
   const std::uint16_t redis_port = vm["port"].as<std::uint16_t>();
   const std::size_t concurrency = vm["concurrency"].as<std::size_t>();
+  const int aof_rewrite_percentage = vm["aof-rewrite-percentage"].as<int>();
   const bool quiet = vm.count("quiet");
 
   // create a test context before proceeding with the forking
@@ -269,11 +274,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (vm.count("aof-rewrite-percentage")) {
-    std::cout << "rewrite percentage = " <<
-        vm["aof-rewrite-percentage"].as<int>() << "\n";
-    std::cout << "-------------------------------\n";
-  } else if (!quiet) {
+  if (!quiet) {
     std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
   }
 
@@ -289,7 +290,8 @@ int main(int argc, char **argv) {
                   vm["num-writes"].as<std::size_t>(),
                   vm["key-size"].as<std::size_t>(),
                   vm["value-size"].as<std::size_t>(),
-                  quiet);
+                  quiet,
+                  aof_rewrite_percentage);
       return 0;
     }
   }

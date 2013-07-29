@@ -1,4 +1,4 @@
-CFLAGS := -O3 -std=c++0x -pthread
+CFLAGS := -O3 -std=c++0x -pthread -g
 LIBS := -lboost_program_options -lboost_system
 
 redisbench: redisbench.cc
