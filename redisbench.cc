@@ -163,7 +163,8 @@ void run_process(const std::string &host,
                  const std::uint16_t port,
                  const std::size_t num_writes,
                  const std::size_t key_size,
-                 const std::size_t val_size) {
+                 const std::size_t val_size,
+                 const bool quiet = false) {
   boost::asio::io_service io_service;
   RedisClient client(io_service);
   client.Connect(host, port);
@@ -206,8 +207,10 @@ void run_process(const std::string &host,
   // try to print the result atomically, using cout.write() instead of
   // the stream operators, since multiple processes may exit at once
   std::stringstream ss;
-  ss << "pid " << getpid() << ", "
-     << median << " " << p95 << " " << p99 << " " << max << "\n";
+  if (!quiet) {
+    ss << "pid " << getpid() << ", ";
+  }
+  ss << median << " " << p95 << " " << p99 << " " << max << "\n";
   std::string outline = ss.str();
   std::cout.write(outline.data(), outline.size());
 }
@@ -216,6 +219,7 @@ int main(int argc, char **argv) {
   po::options_description desc("Allowed options");
   desc.add_options()
       ("help,h", "produce help message")
+      ("quiet,q", "be quiet")
       ("host,H", po::value<std::string>()->default_value("127.0.0.1"),
        "host to connect to")
       ("port,p", po::value<std::uint16_t>()->default_value(6379),
@@ -228,6 +232,8 @@ int main(int argc, char **argv) {
        "the key size, in bytes")
       ("value-size", po::value<std::size_t>()->default_value(500),
        "the value size, in bytes")
+      ("aof-rewrite-percentage", po::value<int>(),
+       "the current AOF rewrite precentage")
       ;
 
   po::variables_map vm;
@@ -242,6 +248,7 @@ int main(int argc, char **argv) {
   const std::string redis_host = vm["host"].as<std::string>();
   const std::uint16_t redis_port = vm["port"].as<std::uint16_t>();
   const std::size_t concurrency = vm["concurrency"].as<std::size_t>();
+  const bool quiet = vm.count("quiet");
 
   // create a test context before proceeding with the forking
   // rigamarole, to ensure that we can actually connect to redis
@@ -249,16 +256,26 @@ int main(int argc, char **argv) {
     boost::asio::io_service io_service;
     RedisClient client(io_service);
     client.Connect(redis_host, redis_port);
-    std::cout << "flushing all data..." << std::flush;
+    if (!quiet) {
+      std::cout << "flushing all data..." << std::flush;
+    }
     bool status = client.FlushAll();
     if (!status) {
       std::cerr << "error flushing!\n";
       return 1;
     }
-    std::cout << " done!" << std::endl;
+    if (!quiet) {
+      std::cout << " done!" << std::endl;
+    }
   }
 
-  std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
+  if (vm.count("aof-rewrite-percentage")) {
+    std::cout << "rewrite percentage = " <<
+        vm["aof-rewrite-percentage"].as<int>() << "\n";
+    std::cout << "-------------------------------\n";
+  } else if (!quiet) {
+    std::cout << "format is: pid, median us, 95th us, 99th us, max us\n";
+  }
 
   // create the worker children
   for (std::size_t i = 0; i < concurrency; i++) {
@@ -271,7 +288,8 @@ int main(int argc, char **argv) {
                   redis_port,
                   vm["num-writes"].as<std::size_t>(),
                   vm["key-size"].as<std::size_t>(),
-                  vm["value-size"].as<std::size_t>());
+                  vm["value-size"].as<std::size_t>(),
+                  quiet);
       return 0;
     }
   }
